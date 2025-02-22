@@ -107,7 +107,6 @@ def auto(update, context):
 def handle_message(update, context):
     coin = update.message.text.strip().upper()
     current_price = get_futures_price(coin)
-    chat_id = update.message.chat_id
 
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
@@ -116,8 +115,7 @@ def handle_message(update, context):
         update.message.reply_text(
             f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
         )
-    context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
-    
+    update.message.reply_text(reply, parse_mode="Markdown")
 
 # Hàm chạy Telegram bot
 def run_bot():
