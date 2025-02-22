@@ -3,6 +3,8 @@ import telegram
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, JobQueue
 from datetime import datetime
 import warnings
+import threading
+from flask import Flask, jsonify
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -13,6 +15,8 @@ BINANCE_24H_API = "https://fapi.binance.com/fapi/v1/ticker/24hr"
 # Telegram config
 TELEGRAM_TOKEN = "7528038148:AAFaLLQkc5EXgFLvXDHSSGFVcn1UYYOw8Tw"
 
+# Flask app
+app = Flask(__name__)
 
 # Lấy giá futures hiện tại
 def get_futures_price(coin_symbol):
@@ -23,7 +27,6 @@ def get_futures_price(coin_symbol):
         return float(data["price"])
     except Exception:
         return None
-
 
 # Lấy biến động 1h (ước lượng từ 24h API)
 def get_price_change_1h(coin_symbol):
@@ -42,7 +45,6 @@ def get_price_change_1h(coin_symbol):
     except Exception:
         return None
 
-
 # Chọn 1 icon cho mỗi mức thay đổi
 def get_change_icon(percentage):
     if percentage >= 50:
@@ -59,7 +61,6 @@ def get_change_icon(percentage):
         return "🍂"  # Giảm nhẹ
     else:
         return "🌗"  # Không đổi
-
 
 # Hàm gửi giá tự động mỗi 1h
 def auto_price(context):
@@ -81,13 +82,11 @@ def auto_price(context):
 
     context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
 
-
 # Command /start
 def start(update, context):
     update.message.reply_text(
         "Yo bro! Gửi tao tên coin (ETH, SOL, DOGE) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 1h!"
     )
-
 
 # Command /auto
 def auto(update, context):
@@ -109,7 +108,6 @@ def auto(update, context):
     )
     update.message.reply_text(f"Đã set auto giá {coin} mỗi 1h, chill đi bro!")
 
-
 # Xử lý tin nhắn thường
 def handle_message(update, context):
     coin = update.message.text.strip().upper()
@@ -129,9 +127,8 @@ def handle_message(update, context):
             f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
         )
 
-
-# Main
-def main():
+# Hàm chạy Telegram bot
+def run_bot():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
@@ -140,6 +137,29 @@ def main():
     updater.start_polling()
     updater.idle()
 
+# Flask endpoint để giả lập web service
+@app.route('/')
+def home():
+    return jsonify({"message": "Bot is running!", "timestamp": datetime.now().isoformat()})
 
+@app.route('/price/<coin>')
+def get_price(coin):
+    current_price = get_futures_price(coin)
+    if current_price is not None:
+        change_1h = get_price_change_1h(coin)
+        return jsonify({
+            "coin": coin.upper(),
+            "price": current_price,
+            "change_1h": change_1h if change_1h is not None else "Error"
+        })
+    return jsonify({"error": f"Could not fetch price for {coin}"}), 400
+
+# Main
 if __name__ == "__main__":
-    main()
+    # Chạy bot trong một thread riêng
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True  # Thread sẽ dừng khi chương trình chính dừng
+    bot_thread.start()
+
+    # Chạy Flask app cho web service
+    app.run(host="0.0.0.0", port=5000)  # Đảm bảo phù hợp với cấu hình Renderp
