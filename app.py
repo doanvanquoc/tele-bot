@@ -71,12 +71,7 @@ def auto_price(context):
     current_price = get_futures_price(coin)
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
-        reply = f"Giá {coin}/USDT: **${current_price:.2f}**\n"
-        reply += (
-            f"Biến động trong 1h {get_change_icon(change_1h)}: **{change_1h:.2f}%**"
-            if change_1h is not None
-            else "Biến động trong 1h ⚠️: Lỗi"
-        )
+        reply = f"Giá {coin}/USDT: **${current_price}**\n"
     else:
         reply = f"Không lấy được giá {coin}, kiểm tra lại bro!"
 
@@ -115,13 +110,7 @@ def handle_message(update, context):
 
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
-        reply = f"Giá {coin}/USDT: **${current_price:.2f}**\n"
-        reply += (
-            f"Biến động trong 1h {get_change_icon(change_1h)}: **{change_1h:.2f}%**"
-            if change_1h is not None
-            else "Biến động trong 1h ⚠️: Lỗi"
-        )
-        update.message.reply_text(reply, parse_mode="Markdown")
+        reply = f"Giá {coin}/USDT: **${current_price}**\n"
     else:
         update.message.reply_text(
             f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
