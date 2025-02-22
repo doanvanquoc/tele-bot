@@ -18,6 +18,9 @@ TELEGRAM_TOKEN = "7528038148:AAFaLLQkc5EXgFLvXDHSSGFVcn1UYYOw8Tw"
 # Flask app
 app = Flask(__name__)
 
+# Dictionary để lưu job theo chat_id và coin
+active_jobs = {}  # Format: {(chat_id, coin): job_object}
+
 # Lấy giá futures hiện tại
 def get_futures_price(coin_symbol):
     try:
@@ -62,25 +65,27 @@ def get_change_icon(percentage):
     else:
         return "🌗"  # Không đổi
 
-# Hàm gửi giá tự động mỗi 1h
+# Hàm gửi giá tự động mỗi 1h, thêm ngày giờ
 def auto_price(context):
     job = context.job
     chat_id = job.context["chat_id"]
     coin = job.context["coin"]
 
     current_price = get_futures_price(coin)
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Lấy ngày giờ hiện tại
+
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
-        reply = f"Giá {coin}/USDT: **${current_price}**\n"
+        reply = f"📅 **{current_time}**\nGiá {coin}/USDT: **${current_price}**\n"
     else:
-        reply = f"Không lấy được giá {coin}, kiểm tra lại bro!"
+        reply = f"📅 **{current_time}**\nKhông lấy được giá {coin}, kiểm tra lại bro!"
 
     context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
 
 # Command /start
 def start(update, context):
     update.message.reply_text(
-        "Yo bro! Gửi tao tên coin (ETH, SOL, DOGE) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 1h!"
+        "Yo bro! Gửi tao tên coin (ETH, SOL, DOGE) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 1h! Muốn hủy thì /cancel <coin>."
     )
 
 # Command /auto
@@ -98,10 +103,36 @@ def auto(update, context):
         )
         return
 
-    context.job_queue.run_repeating(
+    # Kiểm tra nếu đã có job cho coin này
+    job_key = (chat_id, coin)
+    if job_key in active_jobs:
+        update.message.reply_text(f"Đã có auto cho {coin} rồi bro, chill thôi!")
+        return
+
+    # Tạo job mới
+    job = context.job_queue.run_repeating(
         auto_price, interval=3600, first=0, context={"chat_id": chat_id, "coin": coin}
     )
+    active_jobs[job_key] = job  # Lưu job vào dictionary
     update.message.reply_text(f"Đã set auto giá {coin} mỗi 1h, chill đi bro!")
+
+# Command /cancel
+def cancel(update, context):
+    if len(context.args) != 1:
+        update.message.reply_text("Dùng: /cancel <coin>, ví dụ /cancel ETH")
+        return
+
+    coin = context.args[0].upper()
+    chat_id = update.message.chat_id
+    job_key = (chat_id, coin)
+
+    if job_key in active_jobs:
+        job = active_jobs[job_key]
+        job.schedule_removal()  # Xóa job khỏi queue
+        del active_jobs[job_key]  # Xóa khỏi dictionary
+        update.message.reply_text(f"Đã hủy auto giá {coin}, nghỉ ngơi chút đi bro!")
+    else:
+        update.message.reply_text(f"Chưa set auto cho {coin} mà bro, thử /auto trước đi!")
 
 # Xử lý tin nhắn thường
 def handle_message(update, context):
@@ -123,6 +154,7 @@ def run_bot():
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("auto", auto))
+    dp.add_handler(CommandHandler("cancel", cancel))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     updater.start_polling()
     updater.idle()
@@ -152,4 +184,4 @@ if __name__ == "__main__":
     bot_thread.start()
 
     # Chạy Flask app cho web service
-    app.run(host="0.0.0.0", port=5000)  # Đảm bảo phù hợp với cấu hình Renderp
+    app.run(host="0.0.0.0", port=5000)  # Đảm bảo phù hợp với cấu hình Render
