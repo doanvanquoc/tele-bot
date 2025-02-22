@@ -107,6 +107,7 @@ def auto(update, context):
 def handle_message(update, context):
     coin = update.message.text.strip().upper()
     current_price = get_futures_price(coin)
+    chat_id = update.message.chat_id
 
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
