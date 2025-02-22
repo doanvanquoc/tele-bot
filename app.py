@@ -115,6 +115,8 @@ def handle_message(update, context):
         update.message.reply_text(
             f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
         )
+    context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
+    
 
 # Hàm chạy Telegram bot
 def run_bot():
