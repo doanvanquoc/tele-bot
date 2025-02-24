@@ -5,6 +5,7 @@ from datetime import datetime
 import warnings
 import threading
 from flask import Flask, jsonify
+import pytz
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -72,7 +73,7 @@ def auto_price(context):
     coin = job.context["coin"]
 
     current_price = get_futures_price(coin)
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Lấy ngày giờ hiện tại
+    current_time = datetime.now(pytz.timezone('Asia/Ho_Chi_Minh')).strftime("%Y-%m-%d %H:%M:%S")  # Lấy ngày giờ hiện tại
 
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
