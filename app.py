@@ -112,10 +112,10 @@ def auto(update, context):
 
     # Tạo job mới
     job = context.job_queue.run_repeating(
-        auto_price, interval=3600, first=0, context={"chat_id": chat_id, "coin": coin}
+        auto_price, interval=600, first=0, context={"chat_id": chat_id, "coin": coin}
     )
     active_jobs[job_key] = job  # Lưu job vào dictionary
-    update.message.reply_text(f"Đã set auto giá {coin} mỗi 1h, chill đi bro!")
+    update.message.reply_text(f"Đã set auto giá {coin} mỗi 10p, chill đi bro!")
 
 # Command /cancel
 def cancel(update, context):
