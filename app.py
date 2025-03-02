@@ -112,7 +112,7 @@ def get_pnl():
             symbol = pos["symbol"]
             unrealized_pnl = float(pos["unRealizedProfit"])
             entry_price = float(pos["entryPrice"])
-            current_price = get_futures_price(symbol)
+            current_price = get_futures_price(symbol.replace("USDT", ""))
             position_amt = float(pos["positionAmt"])
             reply += (
                 f"- {symbol}: **{unrealized_pnl:.2f} USDT** "
