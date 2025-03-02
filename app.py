@@ -6,7 +6,7 @@ import warnings
 import threading
 from flask import Flask, jsonify
 import pytz
-from binance.client import Client  # Thêm python-binance
+from binance.client import Client
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -98,7 +98,7 @@ def auto_price(context):
     context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
 
 
-# Hàm lấy PNL của các vị thế đang mở
+# Hàm lấy PNL của các vị thế đang mở (đã sửa lỗi leverage)
 def get_pnl():
     try:
         positions = binance_client.futures_position_information()
@@ -113,10 +113,9 @@ def get_pnl():
             unrealized_pnl = float(pos["unRealizedProfit"])
             entry_price = float(pos["entryPrice"])
             position_amt = float(pos["positionAmt"])
-            leverage = int(pos["leverage"])
             reply += (
                 f"- {symbol}: **{unrealized_pnl:.2f} USDT** "
-                f"(Entry: {entry_price}, Số lượng: {position_amt}, Đòn bẩy: {leverage}x)\n"
+                f"(Entry: {entry_price}, Số lượng: {position_amt})\n"
             )
         return reply
     except Exception as e:
@@ -237,7 +236,7 @@ def run_bot():
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("auto", auto))
     dp.add_handler(CommandHandler("cancel", cancel))
-    dp.add_handler(CommandHandler("pnl", pnl))  # Thêm handler cho /pnl
+    dp.add_handler(CommandHandler("pnl", pnl))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     updater.start_polling()
     updater.idle()
