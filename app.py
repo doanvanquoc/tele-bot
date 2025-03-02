@@ -112,10 +112,11 @@ def get_pnl():
             symbol = pos["symbol"]
             unrealized_pnl = float(pos["unRealizedProfit"])
             entry_price = float(pos["entryPrice"])
+            current_price = get_futures_price(symbol)
             position_amt = float(pos["positionAmt"])
             reply += (
                 f"- {symbol}: **{unrealized_pnl:.2f} USDT** "
-                f"(Entry: {entry_price}, Số lượng: {position_amt})\n"
+                f"(Entry: {entry_price}, Giá hiện tại: {current_price})\n"
             )
         return reply
     except Exception as e:
