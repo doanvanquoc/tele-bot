@@ -1,4 +1,3 @@
-import requests
 import telegram
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, JobQueue
 from datetime import datetime
@@ -7,6 +6,7 @@ import threading
 from flask import Flask, jsonify
 import pytz
 from binance.client import Client
+import requests  # Đã có sẵn nhưng để rõ ràng
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -142,51 +142,48 @@ def auto_pnl(context):
 def start(update, context):
     update.message.reply_text(
         "Yo bro! Gửi tao tên coin (ETH, SOL, DOGE) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 3 phút! "
-        "Dùng /pnl để xem PNL 1 lần, /auto pnl để auto PNL, /cancel <coin hoặc pnl> để hủy."
+        "Gõ 'pnl' để xem PNL 1 lần, /pnl để auto PNL, /cancel <coin hoặc pnl> để hủy."
     )
 
 
 # Command /auto
 def auto(update, context):
     if len(context.args) != 1:
-        update.message.reply_text("Dùng: /auto <coin hoặc pnl>, ví dụ /auto ETH hoặc /auto pnl")
+        update.message.reply_text("Dùng: /auto <coin>, ví dụ /auto ETH")
         return
 
-    target = context.args[0].lower()  # coin hoặc "pnl"
+    target = context.args[0].lower()  # chỉ chấp nhận coin, không phải "pnl"
     chat_id = update.message.chat_id
+    coin = target.upper()
 
-    if target == "pnl":
-        job_key = (chat_id, "pnl")
-        if job_key in active_jobs:
-            update.message.reply_text("Đã có auto PNL rồi bro, chill thôi!")
-            return
-        job = context.job_queue.run_repeating(
-            auto_pnl, interval=180, first=0, context={"chat_id": chat_id}
+    if get_futures_price(coin) is None:
+        update.message.reply_text(
+            f"Coin {coin} không hợp lệ hoặc lỗi API, thử lại bro!"
         )
-        active_jobs[job_key] = job
-        update.message.reply_text("Đã set auto PNL mỗi 3 phút, chill đi bro!")
-    else:
-        coin = target.upper()
-        if get_futures_price(coin) is None:
-            update.message.reply_text(
-                f"Coin {coin} không hợp lệ hoặc lỗi API, thử lại bro!"
-            )
-            return
-        job_key = (chat_id, coin)
-        if job_key in active_jobs:
-            update.message.reply_text(f"Đã có auto cho {coin} rồi bro, chill thôi!")
-            return
-        job = context.job_queue.run_repeating(
-            auto_price, interval=180, first=0, context={"chat_id": chat_id, "coin": coin}
-        )
-        active_jobs[job_key] = job
-        update.message.reply_text(f"Đã set auto giá {coin} mỗi 3 phút, chill đi bro!")
+        return
+    job_key = (chat_id, coin)
+    if job_key in active_jobs:
+        update.message.reply_text(f"Đã có auto cho {coin} rồi bro, chill thôi!")
+        return
+    job = context.job_queue.run_repeating(
+        auto_price, interval=180, first=0, context={"chat_id": chat_id, "coin": coin}
+    )
+    active_jobs[job_key] = job
+    update.message.reply_text(f"Đã set auto giá {coin} mỗi 3 phút, chill đi bro!")
 
 
-# Command /pnl
-def pnl(update, context):
-    pnl_info = get_pnl()
-    update.message.reply_text(pnl_info, parse_mode="Markdown")
+# Command /pnl (auto PNL)
+def auto_pnl_command(update, context):
+    chat_id = update.message.chat_id
+    job_key = (chat_id, "pnl")
+    if job_key in active_jobs:
+        update.message.reply_text("Đã có auto PNL rồi bro, chill thôi!")
+        return
+    job = context.job_queue.run_repeating(
+        auto_pnl, interval=180, first=0, context={"chat_id": chat_id}
+    )
+    active_jobs[job_key] = job
+    update.message.reply_text("Đã set auto PNL mỗi 3 phút, chill đi bro!")
 
 
 # Command /cancel
@@ -214,17 +211,23 @@ def cancel(update, context):
 
 # Xử lý tin nhắn thường
 def handle_message(update, context):
-    coin = update.message.text.strip().upper()
-    current_price = get_futures_price(coin)
+    text = update.message.text.strip().lower()
+    chat_id = update.message.chat_id
 
-    if current_price is not None:
-        change_1h = get_price_change_1h(coin)
-        reply = f"Giá {coin}/USDT: **${current_price}**\n"
+    if text == "pnl":
+        pnl_info = get_pnl()
+        update.message.reply_text(pnl_info, parse_mode="Markdown")
     else:
-        update.message.reply_text(
-            f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
-        )
-    update.message.reply_text(reply, parse_mode="Markdown")
+        coin = text.upper()
+        current_price = get_futures_price(coin)
+        if current_price is not None:
+            change_1h = get_price_change_1h(coin)
+            reply = f"Giá {coin}/USDT: **${current_price}**\n"
+            update.message.reply_text(reply, parse_mode="Markdown")
+        else:
+            update.message.reply_text(
+                f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
+            )
 
 
 # Hàm chạy Telegram bot
@@ -233,8 +236,8 @@ def run_bot():
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("auto", auto))
+    dp.add_handler(CommandHandler("pnl", auto_pnl_command))  # /pnl giờ là auto PNL
     dp.add_handler(CommandHandler("cancel", cancel))
-    dp.add_handler(CommandHandler("pnl", pnl))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     updater.start_polling()
     updater.idle()
