@@ -98,7 +98,7 @@ def auto_price(context):
     context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
 
 
-# Hàm lấy PNL của các vị thế đang mở (đã sửa lỗi leverage)
+# Hàm lấy PNL của các vị thế đang mở
 def get_pnl():
     try:
         positions = binance_client.futures_position_information()
@@ -142,54 +142,51 @@ def auto_pnl(context):
 def start(update, context):
     update.message.reply_text(
         "Yo bro! Gửi tao tên coin (ETH, SOL, DOGE) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 3 phút! "
-        "Dùng /pnl để xem PNL, /cancel <coin hoặc pnl> để hủy."
+        "Dùng /pnl để xem PNL 1 lần, /auto pnl để auto PNL, /cancel <coin hoặc pnl> để hủy."
     )
 
 
 # Command /auto
 def auto(update, context):
     if len(context.args) != 1:
-        update.message.reply_text("Dùng: /auto <coin>, ví dụ /auto ETH")
+        update.message.reply_text("Dùng: /auto <coin hoặc pnl>, ví dụ /auto ETH hoặc /auto pnl")
         return
 
-    coin = context.args[0].upper()
+    target = context.args[0].lower()  # coin hoặc "pnl"
     chat_id = update.message.chat_id
 
-    if get_futures_price(coin) is None:
-        update.message.reply_text(
-            f"Coin {coin} không hợp lệ hoặc lỗi API, thử lại bro!"
+    if target == "pnl":
+        job_key = (chat_id, "pnl")
+        if job_key in active_jobs:
+            update.message.reply_text("Đã có auto PNL rồi bro, chill thôi!")
+            return
+        job = context.job_queue.run_repeating(
+            auto_pnl, interval=180, first=0, context={"chat_id": chat_id}
         )
-        return
-
-    job_key = (chat_id, coin)
-    if job_key in active_jobs:
-        update.message.reply_text(f"Đã có auto cho {coin} rồi bro, chill thôi!")
-        return
-
-    job = context.job_queue.run_repeating(
-        auto_price, interval=180, first=0, context={"chat_id": chat_id, "coin": coin}
-    )
-    active_jobs[job_key] = job
-    update.message.reply_text(f"Đã set auto giá {coin} mỗi 3 phút, chill đi bro!")
+        active_jobs[job_key] = job
+        update.message.reply_text("Đã set auto PNL mỗi 3 phút, chill đi bro!")
+    else:
+        coin = target.upper()
+        if get_futures_price(coin) is None:
+            update.message.reply_text(
+                f"Coin {coin} không hợp lệ hoặc lỗi API, thử lại bro!"
+            )
+            return
+        job_key = (chat_id, coin)
+        if job_key in active_jobs:
+            update.message.reply_text(f"Đã có auto cho {coin} rồi bro, chill thôi!")
+            return
+        job = context.job_queue.run_repeating(
+            auto_price, interval=180, first=0, context={"chat_id": chat_id, "coin": coin}
+        )
+        active_jobs[job_key] = job
+        update.message.reply_text(f"Đã set auto giá {coin} mỗi 3 phút, chill đi bro!")
 
 
 # Command /pnl
 def pnl(update, context):
-    chat_id = update.message.chat_id
-    job_key = (chat_id, "pnl")
-
-    if job_key in active_jobs:
-        update.message.reply_text("Đã set auto PNL rồi bro, chill đi!")
-        return
-
     pnl_info = get_pnl()
     update.message.reply_text(pnl_info, parse_mode="Markdown")
-
-    job = context.job_queue.run_repeating(
-        auto_pnl, interval=180, first=0, context={"chat_id": chat_id}
-    )
-    active_jobs[job_key] = job
-    update.message.reply_text("Đã set auto PNL mỗi 3 phút, chill đi bro!")
 
 
 # Command /cancel
@@ -211,7 +208,7 @@ def cancel(update, context):
         update.message.reply_text(f"Đã hủy auto {target}, nghỉ ngơi chút đi bro!")
     else:
         update.message.reply_text(
-            f"Chưa set auto cho {target} mà bro, thử /auto hoặc /pnl trước đi!"
+            f"Chưa set auto cho {target} mà bro, thử /auto trước đi!"
         )
 
 
