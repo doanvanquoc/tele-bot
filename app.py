@@ -87,7 +87,7 @@ def auto_price(context):
 
     if current_price is not None:
         change_1h = get_price_change_1h(coin)
-        reply = f"📅 **{current_time}**\nGiá {coin}/USDT: **${current_price}**\n"
+        reply = f"📅 **{current_time}**\n{coin}: **${current_price}**\n"
     else:
         reply = f"📅 **{current_time}**\nKhông lấy được giá {coin}, kiểm tra lại bro!"
 
@@ -205,7 +205,7 @@ def get_multiple_prices(coins):
         current_price = get_futures_price(coin)
         if current_price is not None:
             change_1h = get_price_change_1h(coin)
-            reply += f"Giá {coin}/USDT: **${current_price}**\n"
+            reply += f"{coin}: **${current_price}**\n"
         else:
             reply += f"Không tìm thấy coin {coin} hoặc lỗi API\n"
     return reply
