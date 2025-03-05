@@ -6,7 +6,7 @@ import threading
 from flask import Flask, jsonify
 import pytz
 from binance.client import Client
-import requests  # Đã có sẵn nhưng để rõ ràng
+import requests
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 BINANCE_FUTURES_API = "https://fapi.binance.com/fapi/v1/ticker/price"
 BINANCE_24H_API = "https://fapi.binance.com/fapi/v1/ticker/24hr"
 
-# Binance API Key và Secret (cần thay bằng của bạn)
+# Binance API Key và Secret
 BINANCE_API_KEY = "PTJ7sV7LzIzyOnoq3eAZcWCH20XGGX0Vyr77eddIYaWdG0bxGotZQw51ZIQOutKW"
 BINANCE_API_SECRET = "rGagN1zhh6zmXmbRWYYQYomg7WHQxfLDF0urQn0ink8biKO06xnISg1eiRIIfagy"
 
@@ -30,7 +30,6 @@ active_jobs = {}  # Format: {(chat_id, coin hoặc "pnl"): job_object}
 # Khởi tạo Binance client
 binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
-
 # Lấy giá futures hiện tại
 def get_futures_price(coin_symbol):
     try:
@@ -40,7 +39,6 @@ def get_futures_price(coin_symbol):
         return float(data["price"])
     except Exception:
         return None
-
 
 # Lấy biến động 1h (ước lượng từ 24h API)
 def get_price_change_1h(coin_symbol):
@@ -59,7 +57,6 @@ def get_price_change_1h(coin_symbol):
     except Exception:
         return None
 
-
 # Chọn 1 icon cho mỗi mức thay đổi
 def get_change_icon(percentage):
     if percentage >= 50:
@@ -76,7 +73,6 @@ def get_change_icon(percentage):
         return "🍂"  # Giảm nhẹ
     else:
         return "🌗"  # Không đổi
-
 
 # Hàm gửi giá tự động mỗi 3 phút, thêm ngày giờ
 def auto_price(context):
@@ -96,7 +92,6 @@ def auto_price(context):
         reply = f"📅 **{current_time}**\nKhông lấy được giá {coin}, kiểm tra lại bro!"
 
     context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
-
 
 # Hàm lấy PNL của các vị thế đang mở
 def get_pnl():
@@ -122,7 +117,6 @@ def get_pnl():
     except Exception as e:
         return f"Lỗi khi lấy PNL: {str(e)}"
 
-
 # Hàm gửi PNL tự động mỗi 3 phút
 def auto_pnl(context):
     job = context.job
@@ -137,14 +131,12 @@ def auto_pnl(context):
         parse_mode="Markdown",
     )
 
-
 # Command /start
 def start(update, context):
     update.message.reply_text(
-        "Yo bro! Gửi tao tên coin (ETH, SOL, DOGE) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 3 phút! "
+        "Yo bro! Gửi tao tên coin (ETH BTC LTC) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 3 phút! "
         "Gõ 'pnl' để xem PNL 1 lần, /pnl để auto PNL, /cancel <coin hoặc pnl> để hủy."
     )
-
 
 # Command /auto
 def auto(update, context):
@@ -171,7 +163,6 @@ def auto(update, context):
     active_jobs[job_key] = job
     update.message.reply_text(f"Đã set auto giá {coin} mỗi 3 phút, chill đi bro!")
 
-
 # Command /pnl (auto PNL)
 def auto_pnl_command(update, context):
     chat_id = update.message.chat_id
@@ -184,7 +175,6 @@ def auto_pnl_command(update, context):
     )
     active_jobs[job_key] = job
     update.message.reply_text("Đã set auto PNL mỗi 3 phút, chill đi bro!")
-
 
 # Command /cancel
 def cancel(update, context):
@@ -208,6 +198,17 @@ def cancel(update, context):
             f"Chưa set auto cho {target} mà bro, thử /auto trước đi!"
         )
 
+# Hàm mới để lấy giá của nhiều coin
+def get_multiple_prices(coins):
+    reply = ""
+    for coin in coins:
+        current_price = get_futures_price(coin)
+        if current_price is not None:
+            change_1h = get_price_change_1h(coin)
+            reply += f"Giá {coin}/USDT: **${current_price}**\n"
+        else:
+            reply += f"Không tìm thấy coin {coin} hoặc lỗi API\n"
+    return reply
 
 # Xử lý tin nhắn thường
 def handle_message(update, context):
@@ -218,17 +219,9 @@ def handle_message(update, context):
         pnl_info = get_pnl()
         update.message.reply_text(pnl_info, parse_mode="Markdown")
     else:
-        coin = text.upper()
-        current_price = get_futures_price(coin)
-        if current_price is not None:
-            change_1h = get_price_change_1h(coin)
-            reply = f"Giá {coin}/USDT: **${current_price}**\n"
-            update.message.reply_text(reply, parse_mode="Markdown")
-        else:
-            update.message.reply_text(
-                f"Không tìm thấy coin {coin} hoặc lỗi API, thử lại bro!"
-            )
-
+        coins = text.split()  # Tách chuỗi thành danh sách các coin
+        reply = get_multiple_prices([coin.upper() for coin in coins])
+        update.message.reply_text(reply, parse_mode="Markdown")
 
 # Hàm chạy Telegram bot
 def run_bot():
@@ -236,12 +229,11 @@ def run_bot():
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("auto", auto))
-    dp.add_handler(CommandHandler("pnl", auto_pnl_command))  # /pnl giờ là auto PNL
+    dp.add_handler(CommandHandler("pnl", auto_pnl_command))
     dp.add_handler(CommandHandler("cancel", cancel))
     dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
     updater.start_polling()
     updater.idle()
-
 
 # Flask endpoint
 @app.route("/")
@@ -249,7 +241,6 @@ def home():
     return jsonify(
         {"message": "Bot is running!", "timestamp": datetime.now().isoformat()}
     )
-
 
 @app.route("/price/<coin>")
 def get_price(coin):
@@ -264,7 +255,6 @@ def get_price(coin):
             }
         )
     return jsonify({"error": f"Could not fetch price for {coin}"}), 400
-
 
 # Main
 if __name__ == "__main__":
