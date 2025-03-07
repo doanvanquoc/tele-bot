@@ -109,7 +109,8 @@ def get_pnl():
         if not open_positions:
             reply = (
                 "Hiện tại không có vị thế nào đang mở bro!\n"
-                f"💰 **Số dư**: {total_balance:.2f} USDT\n"
+                f"💰 **Tổng số dư tài khoản**: {total_balance:.2f} USDT\n"
+                f"💸 **Số dư khả dụng**: {available_balance:.2f} USDT"
             )
         else:
             reply = "📊 **PNL các vị thế đang mở**:\n"
@@ -124,7 +125,8 @@ def get_pnl():
                     f"(Entry: {entry_price}, Giá hiện tại: {current_price})\n"
                 )
             reply += (
-                f"\n💰 **Số dư**: {total_balance:.2f} USDT"
+                f"\n💰 **Tổng số dư tài khoản**: {total_balance:.2f} USDT\n"
+                f"💸 **Số dư khả dụng**: {available_balance:.2f} USDT"
             )
         return reply
     except Exception as e:
