@@ -93,29 +93,42 @@ def auto_price(context):
 
     context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
 
-# Hàm lấy PNL của các vị thế đang mở
+# Hàm lấy PNL của các vị thế đang mở và tổng số dư tài khoản
 def get_pnl():
     try:
+        # Lấy thông tin các vị thế đang mở
         positions = binance_client.futures_position_information()
         open_positions = [pos for pos in positions if float(pos["positionAmt"]) != 0]
 
-        if not open_positions:
-            return "Hiện tại không có vị thế nào đang mở bro!"
+        # Lấy thông tin tài khoản Futures
+        account_info = binance_client.futures_account()
+        total_balance = float(account_info["totalWalletBalance"])  # Tổng số dư tài khoản
+        available_balance = float(account_info["availableBalance"])  # Số dư khả dụng
 
-        reply = "📊 **PNL các vị thế đang mở**:\n"
-        for pos in open_positions:
-            symbol = pos["symbol"]
-            unrealized_pnl = float(pos["unRealizedProfit"])
-            entry_price = float(pos["entryPrice"])
-            current_price = get_futures_price(symbol.replace("USDT", ""))
-            position_amt = float(pos["positionAmt"])
+        # Xử lý thông tin vị thế
+        if not open_positions:
+            reply = (
+                "Hiện tại không có vị thế nào đang mở bro!\n"
+                f"💰 **Số dư**: {total_balance:.2f} USDT\n"
+            )
+        else:
+            reply = "📊 **PNL các vị thế đang mở**:\n"
+            for pos in open_positions:
+                symbol = pos["symbol"]
+                unrealized_pnl = float(pos["unRealizedProfit"])
+                entry_price = float(pos["entryPrice"])
+                current_price = get_futures_price(symbol.replace("USDT", ""))
+                position_amt = float(pos["positionAmt"])
+                reply += (
+                    f"- {symbol}: **{unrealized_pnl:.2f} USDT** "
+                    f"(Entry: {entry_price}, Giá hiện tại: {current_price})\n"
+                )
             reply += (
-                f"- {symbol}: **{unrealized_pnl:.2f} USDT** "
-                f"(Entry: {entry_price}, Giá hiện tại: {current_price})\n"
+                f"\n💰 **Số dư**: {total_balance:.2f} USDT"
             )
         return reply
     except Exception as e:
-        return f"Lỗi khi lấy PNL: {str(e)}"
+        return f"Lỗi khi lấy PNL hoặc số dư: {str(e)}"
 
 # Hàm gửi PNL tự động mỗi 3 phút
 def auto_pnl(context):
