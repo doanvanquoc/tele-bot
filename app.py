@@ -77,7 +77,7 @@ def get_pnl():
         if not open_positions:
             return "Hiện tại không có vị thế nào đang mở bro!"
         
-        reply = "pnl\n"
+        reply = ""
         for pos in open_positions:
             symbol = pos["symbol"].replace("USDT", "")
             unrealized_pnl = float(pos["unRealizedProfit"])
