@@ -100,15 +100,26 @@ def start(update, context):
         "Gõ 'pnl' để xem PNL 1 lần, /pnl để auto PNL, /cancel <coin hoặc pnl> để hủy, /clear để xóa tin nhắn."
     )
 
-# Command /clear - Xóa tất cả tin nhắn trong chat
+# Command /clear - Xóa các tin nhắn gần đây
 def clear(update, context):
     chat_id = update.message.chat_id
+    latest_message_id = update.message.message_id  # ID của tin nhắn /clear
+    
     try:
-        # Xóa tin nhắn của command /clear
-        context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
-        update.message.reply_text("Đã xóa hết tin nhắn bro!", parse_mode="Markdown")
+        # Xóa tin nhắn chứa lệnh /clear
+        context.bot.delete_message(chat_id=chat_id, message_id=latest_message_id)
+        
+        # Thử xóa 100 tin nhắn trước đó
+        for msg_id in range(latest_message_id - 100, latest_message_id):
+            try:
+                context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception:
+                continue  # Bỏ qua nếu tin nhắn không thể xóa
+        
+        # Gửi thông báo sau khi xóa
+        context.bot.send_message(chat_id=chat_id, text="Đã xóa các tin nhắn gần đây bro!", parse_mode="Markdown")
     except Exception as e:
-        update.message.reply_text(f"Lỗi khi xóa tin nhắn: {str(e)}", parse_mode="Markdown")
+        context.bot.send_message(chat_id=chat_id, text=f"Lỗi khi xóa tin nhắn: {str(e)}", parse_mode="Markdown")
 
 # Command /auto
 def auto(update, context):
