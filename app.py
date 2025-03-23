@@ -128,10 +128,10 @@ def auto(update, context):
         update.message.reply_text(f"Đã có auto cho {coin} rồi bro!")
         return
     job = context.job_queue.run_repeating(
-        auto_price, interval=600, first=0, context={"chat_id": chat_id, "coin": coin}
+        auto_price, interval=300, first=0, context={"chat_id": chat_id, "coin": coin}
     )
     active_jobs[job_key] = job
-    update.message.reply_text(f"Đã set auto giá {coin} mỗi 10 phút!")
+    update.message.reply_text(f"Đã set auto giá {coin} mỗi 5 phút!")
 
 # Command /pnl (auto PNL)
 def auto_pnl_command(update, context):
