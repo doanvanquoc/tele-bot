@@ -141,10 +141,10 @@ def auto_pnl_command(update, context):
         update.message.reply_text("Đã có auto PNL rồi bro!")
         return
     job = context.job_queue.run_repeating(
-        auto_pnl, interval=180, first=0, context={"chat_id": chat_id}
+        auto_pnl, interval=600, first=0, context={"chat_id": chat_id}
     )
     active_jobs[job_key] = job
-    update.message.reply_text("Đã set auto PNL mỗi 3 phút!")
+    update.message.reply_text("Đã set auto PNL mỗi 10 phút!")
 
 # Command /cancel
 def cancel(update, context):
