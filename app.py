@@ -78,10 +78,15 @@ def get_pnl():
             return "Hiện tại không có vị thế nào đang mở bro!"
         
         reply = ""
+        total_pnl = 0.0 # Initialize total PNL
         for pos in open_positions:
             symbol = pos["symbol"].replace("USDT", "")
             unrealized_pnl = float(pos["unRealizedProfit"])
+            total_pnl += unrealized_pnl # Add to total PNL
             reply += f"{symbol}: **{unrealized_pnl:.2f} USDT**\n"
+        
+        # Add the total PNL to the reply
+        reply += f"\n**Tổng PNL: {total_pnl:.2f} USDT**"
         return reply
     except Exception as e:
         return f"Lỗi khi lấy PNL: {str(e)}"
