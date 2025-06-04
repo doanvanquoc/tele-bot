@@ -6,11 +6,7 @@ import threading
 from flask import Flask, jsonify
 import pytz
 from binance.client import Client
-from binance.websockets import BinanceSocketManager
-from binance.enums import *
 import requests
-import json
-import asyncio
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -35,23 +31,35 @@ active_jobs = {}  # Format: {(chat_id, coin hoặc "pnl"): job_object}
 binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
 # Khởi tạo BinanceSocketManager
-bm = BinanceSocketManager(binance_client)
-
-# Biến toàn cục để lưu trữ dữ liệu vị thế
+from binance.client import BinanceSocketManager
 positions_data = []
 
 # Hàm callback xử lý dữ liệu từ WebSocket
 def handle_position_message(msg):
     global positions_data
-    if 'e' in msg and msg['e'] == 'POSITION':
-        positions_data = msg['ps']  # Lưu trữ dữ liệu vị thế
-    elif 'e' in msg and msg['e'] == 'error':
+    if msg['e'] == 'ACCOUNT_UPDATE':
+        positions_data = msg['a']['p']  # Lưu trữ dữ liệu vị thế từ user data stream
+    elif msg['e'] == 'error':
         print(f"WebSocket error: {msg['m']}")
 
-# Hàm khởi tạo WebSocket cho positionRisk
+# Hàm khởi tạo WebSocket cho user data stream
 def start_position_websocket():
-    bm.user_data(handle_position_message, user_data_type='positionRisk')
+    # Lấy listen key cho user data stream
+    listen_key = binance_client.stream_get_listen_key()
+    # Khởi động WebSocket với listen key
+    bm = BinanceSocketManager(binance_client)
+    bm.start_user_socket(handle_position_message)
     bm.start()
+    # Giữ listen key sống (ping mỗi 30 phút)
+    def keep_alive():
+        while True:
+            try:
+                binance_client.stream_keep_alive(listen_key)
+                time.sleep(1800)  # Ping mỗi 30 phút
+            except Exception as e:
+                print(f"Error keeping listen key alive: {e}")
+                break
+    threading.Thread(target=keep_alive, daemon=True).start()
 
 # Lấy giá futures hiện tại
 def get_futures_price(coin_symbol):
@@ -103,7 +111,7 @@ def get_pnl():
         reply = ""
         for pos in open_positions:
             symbol = pos["symbol"].replace("USDT", "")
-            unrealized_pnl = float(pos["unRealizedProfit"])
+            unrealized_pnl = float(pos["unrealizedProfit"])
             reply += f"{symbol}: **{unrealized_pnl:.2f} USDT**\n"
         return reply
     except Exception as e:
@@ -122,6 +130,7 @@ def start(update, context):
         "Yo bro! Gửi tao tên coin (ETH BTC LTC) để xem giá, hoặc dùng /auto <coin> để nhận giá mỗi 3 phút! "
         "Gõ 'pnl' để xem PNL 1 lần, /pnl để auto PNL, /cancel <coin hoặc pnl> để hủy, /clear để xóa tin nhắn."
     )
+
 # Command /clear - Xóa tất cả tin nhắn trong chat
 def clear(update, context):
     chat_id = update.message.chat_id
@@ -244,6 +253,7 @@ def get_price(coin):
 
 # Main
 if __name__ == "__main__":
+    import time
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.daemon = True
     bot_thread.start()
