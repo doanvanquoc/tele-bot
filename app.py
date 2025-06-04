@@ -1,16 +1,19 @@
 import telegram
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, JobQueue
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 from datetime import datetime
 import warnings
 import threading
 from flask import Flask, jsonify
 import pytz
 from binance.client import Client
+from binance.websocket.futures.management import FuturesWebsocketClientManager # Import FuturesWebsocketClientManager
 import requests
+import json
+import time
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Binance Futures API (public)
+# Binance Futures API (public) - Vẫn giữ để lấy giá coin 1 lần
 BINANCE_FUTURES_API = "https://fapi.binance.com/fapi/v1/ticker/price"
 BINANCE_24H_API = "https://fapi.binance.com/fapi/v1/ticker/24hr"
 
@@ -27,10 +30,18 @@ app = Flask(__name__)
 # Dictionary để lưu job theo chat_id và coin hoặc chức năng
 active_jobs = {}  # Format: {(chat_id, coin hoặc "pnl"): job_object}
 
-# Khởi tạo Binance client
+# Khởi tạo Binance client (dùng cho REST API không liên quan đến PNL, ví dụ: lấy giá coin)
 binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
 
-# Lấy giá futures hiện tại
+# --- GLOBAL VARIABLES FOR WEBSOCKET DATA ---
+# Dictionary để lưu trữ dữ liệu PNL nhận được từ WebSocket
+# Key: symbol, Value: { 'positionAmt': float, 'unRealizedProfit': float, ... }
+current_pnl_data = {}
+# Khóa để bảo vệ current_pnl_data khi cập nhật
+pnl_data_lock = threading.Lock()
+# --- END GLOBAL VARIABLES ---
+
+# Lấy giá futures hiện tại (dùng REST API, không thay đổi)
 def get_futures_price(coin_symbol):
     try:
         symbol = f"{coin_symbol.upper()}USDT"
@@ -40,58 +51,110 @@ def get_futures_price(coin_symbol):
     except Exception:
         return None
 
-# Lấy biến động 1h (ước lượng từ 24h API)
+# Lấy biến động 1h (ước lượng từ 24h API, không thay đổi)
 def get_price_change_1h(coin_symbol):
     try:
         symbol = f"{coin_symbol.upper()}USDT"
         response = requests.get(BINANCE_24H_API, params={"symbol": symbol})
-        data = response.json()
+        data = response = requests.get(BINANCE_24H_API, params={"symbol": symbol}).json()
         current_price = float(data["lastPrice"])
         high_price_24h = float(data["highPrice"])
         low_price_24h = float(data["lowPrice"])
+        # Ước lượng thay đổi 1h dựa trên 24h là không chính xác, chỉ mang tính tham khảo
+        # Để chính xác hơn cần dữ liệu candlestick 1h hoặc API tương ứng
         avg_price_24h = (high_price_24h + low_price_24h) / 2
-        change_1h = ((current_price - avg_price_24h) / avg_price_24h) * 100 * 24
+        change_1h = ((current_price - avg_price_24h) / avg_price_24h) * 100
         return change_1h
     except Exception:
         return None
 
-# Hàm gửi giá tự động mỗi 3 phút, chỉ gửi giá
-def auto_price(context):
-    job = context.job
-    chat_id = job.context["chat_id"]
-    coin = job.context["coin"]
-    current_price = get_futures_price(coin)
-    
-    if current_price is not None:
-        reply = f"{coin}: **${current_price}**"
-    else:
-        reply = f"Không lấy được giá {coin}"
-    context.bot.send_message(chat_id=chat_id, text=reply, parse_mode="Markdown")
+# --- WEBSOCKET HANDLERS ---
+def handle_socket_message(msg):
+    global current_pnl_data
 
-# Hàm lấy PNL của các vị thế đang mở
-def get_pnl():
-    try:
-        positions = binance_client.futures_position_information()
-        open_positions = [pos for pos in positions if float(pos["positionAmt"]) != 0]
+    if msg and 'e' in msg:
+        event_type = msg['e']
         
-        if not open_positions:
+        # Xử lý sự kiện cập nhật tài khoản (ACCOUNT_UPDATE)
+        if event_type == 'ACCOUNT_UPDATE' and 'a' in msg and 'P' in msg['a']:
+            # Lấy thông tin vị thế
+            positions = msg['a']['P']
+            
+            with pnl_data_lock: # Bảo vệ dữ liệu khi cập nhật
+                for pos in positions:
+                    symbol = pos['s']
+                    position_amount = float(pos['pa'])
+                    unrealized_profit = float(pos['up'])
+                    
+                    # Chỉ lưu trữ các vị thế đang mở (positionAmt != 0)
+                    if position_amount != 0:
+                        current_pnl_data[symbol] = {
+                            'positionAmt': position_amount,
+                            'unRealizedProfit': unrealized_profit,
+                            'entryPrice': float(pos['ep']),
+                            'markPrice': float(pos['mp']),
+                            'liquidationPrice': float(pos['liqP'])
+                        }
+                    else:
+                        # Nếu vị thế đóng, xóa khỏi dictionary
+                        if symbol in current_pnl_data:
+                            del current_pnl_data[symbol]
+            # print(f"WebSocket PNL Updated: {current_pnl_data}") # Để debug
+        elif event_type == 'listenKeyExpired':
+            print("Listen key expired, attempting to renew...")
+            # Cần cơ chế để tự động gia hạn listenKey
+            # Trong production, bạn sẽ cần một thread định kỳ gọi API gia hạn listenKey
+
+def handle_socket_open():
+    print("WebSocket connection opened.")
+
+def handle_socket_close():
+    print("WebSocket connection closed.")
+
+def handle_socket_error(error):
+    print(f"WebSocket error: {error}")
+
+# Hàm chạy WebSocket client
+def run_websocket_client():
+    ws_client = FuturesWebsocketClientManager(api_key=BINANCE_API_KEY, api_secret=BINANCE_API_SECRET)
+    
+    # Lắng nghe Account Update (dữ liệu PNL và vị thế)
+    # Stream này yêu cầu listenKey. FuturesWebsocketClientManager sẽ tự động lấy và gia hạn.
+    ws_client.start_user_data_feed(
+        callback=handle_socket_message,
+        # Nếu muốn tự xử lý lỗi và đóng/mở kết nối:
+        # on_open=handle_socket_open,
+        # on_close=handle_socket_close,
+        # on_error=handle_socket_error
+    )
+    ws_client.start() # Bắt đầu vòng lặp sự kiện WebSocket
+    print("WebSocket client started.")
+    # Giữ luồng sống
+    while True:
+        time.sleep(1)
+
+# Hàm lấy PNL của các vị thế đang mở (Sử dụng dữ liệu từ WebSocket)
+def get_pnl():
+    global current_pnl_data
+    
+    with pnl_data_lock: # Đảm bảo đọc dữ liệu an toàn
+        if not current_pnl_data:
             return "Hiện tại không có vị thế nào đang mở bro!"
         
         reply = ""
-        total_pnl = 0.0 # Initialize total PNL
-        for pos in open_positions:
-            symbol = pos["symbol"].replace("USDT", "")
-            unrealized_pnl = float(pos["unRealizedProfit"])
-            total_pnl += unrealized_pnl # Add to total PNL
-            reply += f"{symbol}: **{unrealized_pnl:.2f} USDT**\n"
+        total_pnl = 0.0
         
-        # Add the total PNL to the reply
+        # Duyệt qua dữ liệu PNL đã được cập nhật từ WebSocket
+        for symbol, data in current_pnl_data.items():
+            unrealized_pnl = data['unRealizedProfit']
+            total_pnl += unrealized_pnl
+            
+            reply += f"{symbol.replace('USDT', '')}: **{unrealized_pnl:.2f} USDT** (Entry: {data['entryPrice']:.2f}, Mark: {data['markPrice']:.2f})\n"
+        
         reply += f"\n**Tổng PNL: {total_pnl:.2f} USDT**"
         return reply
-    except Exception as e:
-        return f"Lỗi khi lấy PNL: {str(e)}"
-
-# Hàm gửi PNL tự động mỗi 3 phút
+    
+# Hàm gửi PNL tự động mỗi 3 phút (sử dụng dữ liệu từ WebSocket)
 def auto_pnl(context):
     job = context.job
     chat_id = job.context["chat_id"]
@@ -109,7 +172,6 @@ def start(update, context):
 def clear(update, context):
     chat_id = update.message.chat_id
     try:
-        # Xóa tin nhắn của command /clear
         context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
         update.message.reply_text("Đã xóa hết tin nhắn bro!", parse_mode="Markdown")
     except Exception as e:
@@ -169,7 +231,7 @@ def cancel(update, context):
     else:
         update.message.reply_text(f"Chưa set auto cho {target}!")
 
-# Hàm lấy giá của nhiều coin
+# Hàm lấy giá của nhiều coin (dùng REST API)
 def get_multiple_prices(coins):
     reply = ""
     for coin in coins:
@@ -221,7 +283,15 @@ def get_price(coin):
 
 # Main
 if __name__ == "__main__":
+    # Khởi tạo và chạy WebSocket client trong một luồng riêng
+    websocket_thread = threading.Thread(target=run_websocket_client)
+    websocket_thread.daemon = True # Đảm bảo luồng này sẽ kết thúc khi chương trình chính kết thúc
+    websocket_thread.start()
+    
+    # Khởi tạo và chạy Telegram bot trong một luồng riêng
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.daemon = True
     bot_thread.start()
+    
+    # Chạy Flask app
     app.run(host="0.0.0.0", port=5000)
