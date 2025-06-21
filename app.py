@@ -112,26 +112,32 @@ def clear(update, context):
 
 # Command /auto
 def auto(update, context):
-    if len(context.args) != 1:
-        update.message.reply_text("Dùng: /auto <coin>, ví dụ /auto ETH")
+    if not context.args:
+        update.message.reply_text("Dùng: /auto <coin1> <coin2> ..., ví dụ /auto ETH BTC")
         return
 
-    target = context.args[0].lower()
     chat_id = update.message.chat_id
-    coin = target.upper()
+    coins_to_auto = [arg.upper() for arg in context.args]
+    
+    response_messages = []
+    for coin in coins_to_auto:
+        if get_futures_price(coin) is None:
+            response_messages.append(f"Coin **{coin}** không hợp lệ hoặc lỗi API!")
+            continue
 
-    if get_futures_price(coin) is None:
-        update.message.reply_text(f"Coin {coin} không hợp lệ hoặc lỗi API!")
-        return
-    job_key = (chat_id, coin)
-    if job_key in active_jobs:
-        update.message.reply_text(f"Đã có auto cho {coin} rồi bro!")
-        return
-    job = context.job_queue.run_repeating(
-        auto_price, interval=300, first=0, context={"chat_id": chat_id, "coin": coin}
-    )
-    active_jobs[job_key] = job
-    update.message.reply_text(f"Đã set auto giá {coin} mỗi 5 phút!")
+        job_key = (chat_id, coin)
+        if job_key in active_jobs:
+            response_messages.append(f"Đã có auto cho **{coin}** rồi bro!")
+            continue
+        
+        job = context.job_queue.run_repeating(
+            auto_price, interval=300, first=0, context={"chat_id": chat_id, "coin": coin}
+        )
+        active_jobs[job_key] = job
+        response_messages.append(f"Đã set auto giá **{coin}** mỗi 5 phút!")
+    
+    update.message.reply_text("\n".join(response_messages), parse_mode="Markdown")
+
 
 # Command /pnl (auto PNL)
 def auto_pnl_command(update, context):
@@ -160,9 +166,9 @@ def cancel(update, context):
         job = active_jobs[job_key]
         job.schedule_removal()
         del active_jobs[job_key]
-        update.message.reply_text(f"Đã hủy auto {target}!")
+        update.message.reply_text(f"Đã hủy auto **{target}**!")
     else:
-        update.message.reply_text(f"Chưa set auto cho {target}!")
+        update.message.reply_text(f"Chưa set auto cho **{target}**!")
 
 # Hàm lấy giá của nhiều coin
 def get_multiple_prices(coins):
@@ -172,7 +178,7 @@ def get_multiple_prices(coins):
         if current_price is not None:
             reply += f"{coin}: **${current_price}**\n"
         else:
-            reply += f"Không tìm thấy coin {coin}\n"
+            reply += f"Không tìm thấy coin **{coin}**\n"
     return reply
 
 # Xử lý tin nhắn thường
