@@ -131,10 +131,10 @@ def auto(update, context):
             continue
         
         job = context.job_queue.run_repeating(
-            auto_price, interval=300, first=0, context={"chat_id": chat_id, "coin": coin}
+            auto_price, interval=120, first=0, context={"chat_id": chat_id, "coin": coin}
         )
         active_jobs[job_key] = job
-        response_messages.append(f"Đã set auto giá **{coin}** mỗi 5 phút!")
+        response_messages.append(f"Đã set auto giá **{coin}** mỗi 2 phút!")
     
     update.message.reply_text("\n".join(response_messages), parse_mode="Markdown")
 
