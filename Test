@@ -1,0 +1,443 @@
+import pandas as pd
+import numpy as np
+import pandas_ta as ta
+from binance.client import Client
+import telegram
+import schedule
+import time
+import asyncio
+import nest_asyncio
+
+# Cho phép nest_asyncio để chạy asyncio trong môi trường không phải async (ví dụ: schedule)
+nest_asyncio.apply()
+
+# --- Cấu hình của bạn ---
+# API Binance
+BINANCE_API_KEY = "YOUR_BINANCE_API_KEY"
+BINANCE_API_SECRET = "YOUR_BINANCE_API_SECRET"
+
+# Cấu hình Telegram Bot
+TELEGRAM_BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+
+# Cấu hình tín hiệu
+SYMBOL = "BTCUSDT"  # Cặp giao dịch (ví dụ: Bitcoin/USDT)
+TIMEFRAME = "1h"    # Khung thời gian (ví dụ: '15m', '1h', '4h', '1d')
+CANDLE_LIMIT = 200 # Số lượng nến lịch sử để tính toán (đảm bảo đủ cho các chỉ báo)
+
+# Tham số chỉ báo (tùy chỉnh nếu cần)
+MULTIPLIER = 2.0
+ATR_PERIODS = 14
+ATR_CALC_METHOD = "Method 1" # "Method 1" hoặc "Method 2"
+CLOUD_VAL = 10
+STOP_LOSS_PERCENT = 2.0 # 2.0 cho 2%
+
+# --- Khởi tạo các client ---
+binance_client = Client(BINANCE_API_KEY, BINANCE_API_SECRET)
+telegram_bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+
+# --- Class chỉ báo (giữ nguyên như code trước) ---
+class TrendSignalsUAlgo:
+    def __init__(self, df, multiplier=2.0, atr_periods=14, atr_calc_method="Method 1",
+                 cloud_val=10, stop_loss_percent=2.0):
+        self.df = df.copy()
+        self.multiplier = multiplier
+        self.atr_periods = atr_periods
+        self.atr_calc_method = atr_calc_method
+        self.cloud_val = cloud_val
+        self.stop_loss_percent = stop_loss_percent / 100 if stop_loss_percent > 0 else 99999
+
+        self.df['cmoCalc'] = np.nan
+        self.df['rsiCalc'] = np.nan
+        self.df['up'] = np.nan
+        self.df['dn'] = np.nan
+        self.df['trend'] = 0
+        self.df['buySignal'] = False
+        self.df['sellSignal'] = False
+        self.df['pos'] = 0
+        self.df['entryOfLongPosition'] = np.nan
+        self.df['entryOfShortPosition'] = np.nan
+        self.df['stopLossForLong'] = np.nan
+        self.df['stopLossForShort'] = np.nan
+        self.df['takeProfitForLong1R'] = np.nan
+        self.df['takeProfitForLong2R'] = np.nan
+        self.df['takeProfitForLong3R'] = np.nan
+        self.df['takeProfitForShort1R'] = np.nan
+        self.df['takeProfitForShort2R'] = np.nan
+        self.df['takeProfitForShort3R'] = np.nan
+        self.df['long_sl'] = False
+        self.df['short_sl'] = False
+        self.df['takeProfitForLongFinal'] = False
+        self.df['takeProfitForShortFinal'] = False
+        self.df['smaSrcHigh'] = np.nan
+        self.df['smaSrcLow'] = np.nan
+        self.df['macdLine'] = np.nan
+        self.df['signalLine'] = np.nan
+        self.df['histLine'] = np.nan
+
+    def _calculate_cmo(self):
+        src1 = ta.ema(self.df['open'], length=5).shift(1)
+        src2 = ta.ema(self.df['close'], length=12)
+
+        momm1 = src1.diff()
+        momm2 = src2.diff()
+
+        m1 = momm1.apply(lambda x: x if pd.notna(x) and pd.notna(momm2.loc[x.name]) and x >= momm2.loc[x.name] else 0.0)
+        m2 = momm1.apply(lambda x: -x if pd.notna(x) and pd.notna(momm2.loc[x.name]) and x < momm2.loc[x.name] else 0.0)
+
+        sm1 = m1
+        sm2 = m2
+
+        denominator = sm1 + sm2
+        # Tránh chia cho 0 hoặc NaN
+        self.df['cmoCalc'] = 100 * (sm1 - sm2) / denominator
+        self.df['cmoCalc'] = self.df['cmoCalc'].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+
+    def _calculate_pivots(self):
+        self.df['hpivot'] = self.df['high'].rolling(window=2).max()
+        self.df['lpivot'] = self.df['low'].rolling(window=2).min()
+        self.df['hpivot'] = self.df['hpivot'].fillna(method='ffill')
+        self.df['lpivot'] = self.df['lpivot'].fillna(method='ffill')
+
+    def _calculate_rsi(self):
+        self.df['rsiCalc'] = ta.rsi(self.df['close'], length=9)
+
+    def _calculate_supertrend(self):
+        if self.atr_calc_method == "Method 1":
+            self.df['atr'] = ta.atr(self.df['high'], self.df['low'], self.df['close'], length=self.atr_periods)
+        else:
+            tr = ta.true_range(self.df['high'], self.df['low'], self.df['close'])
+            self.df['atr'] = ta.sma(tr, length=self.atr_periods)
+
+        # Tính toán Up và Dn ban đầu
+        up_base = self.df['close'] - (self.multiplier * self.df['atr'])
+        dn_base = self.df['close'] + (self.multiplier * self.df['atr'])
+
+        # Sử dụng vòng lặp để mô phỏng logic đệ quy của Pine Script
+        for i in range(1, len(self.df)):
+            # Giá trị up/dn từ thanh nến trước, dùng np.nan để xử lý khởi tạo
+            up1_val = self.df['up'].iloc[i-1] if i > 0 and not np.isnan(self.df['up'].iloc[i-1]) else up_base.iloc[i-1]
+            dn1_val = self.df['dn'].iloc[i-1] if i > 0 and not np.isnan(self.df['dn'].iloc[i-1]) else dn_base.iloc[i-1]
+
+            # Logic SuperTrend
+            if self.df['close'].iloc[i-1] > up1_val:
+                self.df.loc[self.df.index[i], 'up'] = max(up_base.iloc[i], up1_val)
+            else:
+                self.df.loc[self.df.index[i], 'up'] = up_base.iloc[i]
+
+            if self.df['close'].iloc[i-1] < dn1_val:
+                self.df.loc[self.df.index[i], 'dn'] = min(dn_base.iloc[i], dn1_val)
+            else:
+                self.df.loc[self.df.index[i], 'dn'] = dn_base.iloc[i]
+
+            # Logic xác định trend
+            trend_prev = self.df['trend'].iloc[i-1] if i > 0 else 0
+            if trend_prev == -1 and self.df['close'].iloc[i] > self.df['dn'].iloc[i]:
+                self.df.loc[self.df.index[i], 'trend'] = 1
+            elif trend_prev == 1 and self.df['close'].iloc[i] < self.df['up'].iloc[i]:
+                self.df.loc[self.df.index[i], 'trend'] = -1
+            else:
+                self.df.loc[self.df.index[i], 'trend'] = trend_prev
+
+            # Tín hiệu mua/bán
+            if self.df['trend'].iloc[i] == 1 and self.df['trend'].iloc[i-1] == -1:
+                self.df.loc[self.df.index[i], 'buySignal'] = True
+            elif self.df['trend'].iloc[i] == -1 and self.df['trend'].iloc[i-1] == 1:
+                self.df.loc[self.df.index[i], 'sellSignal'] = True
+
+            # Theo dõi vị thế pos
+            pos_prev = self.df['pos'].iloc[i-1] if i > 0 else 0.0
+            if self.df['buySignal'].iloc[i]:
+                self.df.loc[self.df.index[i], 'pos'] = 1
+            elif self.df['sellSignal'].iloc[i]:
+                self.df.loc[self.df.index[i], 'pos'] = -1
+            else:
+                self.df.loc[self.df.index[i], 'pos'] = pos_prev
+
+    def _calculate_entry_tp_sl(self):
+        for i in range(len(self.df)):
+            # Cập nhật entryOfLongPosition
+            if self.df['buySignal'].iloc[i]:
+                self.df.loc[self.df.index[i], 'entryOfLongPosition'] = self.df['close'].iloc[i]
+            elif i > 0: # Kế thừa giá trị trước đó nếu không có tín hiệu mới
+                self.df.loc[self.df.index[i], 'entryOfLongPosition'] = self.df['entryOfLongPosition'].iloc[i-1]
+
+            # Cập nhật entryOfShortPosition
+            if self.df['sellSignal'].iloc[i]:
+                self.df.loc[self.df.index[i], 'entryOfShortPosition'] = self.df['close'].iloc[i]
+            elif i > 0: # Kế thừa giá trị trước đó nếu không có tín hiệu mới
+                self.df.loc[self.df.index[i], 'entryOfShortPosition'] = self.df['entryOfShortPosition'].iloc[i-1]
+
+
+            # Tính toán SL/TP chỉ khi có vị thế hoặc vừa có tín hiệu buy/sell
+            if self.df['pos'].iloc[i] != 0 or self.df['buySignal'].iloc[i] or self.df['sellSignal'].iloc[i]:
+                entry_long = self.df['entryOfLongPosition'].iloc[i]
+                entry_short = self.df['entryOfShortPosition'].iloc[i]
+
+                if not pd.isna(entry_long):
+                    self.df.loc[self.df.index[i], 'stopLossForLong'] = entry_long * (1 - self.stop_loss_percent)
+                    self.df.loc[self.df.index[i], 'takeProfitForLong1R'] = entry_long * (1 + self.stop_loss_percent)
+                    self.df.loc[self.df.index[i], 'takeProfitForLong2R'] = entry_long * (1 + self.stop_loss_percent * 2)
+                    self.df.loc[self.df.index[i], 'takeProfitForLong3R'] = entry_long * (1 + self.stop_loss_percent * 3)
+                elif i > 0: # Kế thừa từ thanh nến trước nếu không có entry mới
+                    self.df.loc[self.df.index[i], 'stopLossForLong'] = self.df['stopLossForLong'].iloc[i-1]
+                    self.df.loc[self.df.index[i], 'takeProfitForLong1R'] = self.df['takeProfitForLong1R'].iloc[i-1]
+                    self.df.loc[self.df.index[i], 'takeProfitForLong2R'] = self.df['takeProfitForLong2R'].iloc[i-1]
+                    self.df.loc[self.df.index[i], 'takeProfitForLong3R'] = self.df['takeProfitForLong3R'].iloc[i-1]
+
+
+                if not pd.isna(entry_short):
+                    self.df.loc[self.df.index[i], 'stopLossForShort'] = entry_short * (1 + self.stop_loss_percent)
+                    self.df.loc[self.df.index[i], 'takeProfitForShort1R'] = entry_short * (1 - self.stop_loss_percent)
+                    self.df.loc[self.df.index[i], 'takeProfitForShort2R'] = entry_short * (1 - self.stop_loss_percent * 2)
+                    self.df.loc[self.df.index[i], 'takeProfitForShort3R'] = entry_short * (1 - self.stop_loss_percent * 3)
+                elif i > 0: # Kế thừa từ thanh nến trước nếu không có entry mới
+                    self.df.loc[self.df.index[i], 'stopLossForShort'] = self.df['stopLossForShort'].iloc[i-1]
+                    self.df.loc[self.df.index[i], 'takeProfitForShort1R'] = self.df['takeProfitForShort1R'].iloc[i-1]
+                    self.df.loc[self.df.index[i], 'takeProfitForShort2R'] = self.df['takeProfitForShort2R'].iloc[i-1]
+                    self.df.loc[self.df.index[i], 'takeProfitForShort3R'] = self.df['takeProfitForShort3R'].iloc[i-1]
+
+        # Kiểm tra điều kiện đóng vị thế (SL/TP)
+        for i in range(1, len(self.df)):
+            pos_prev = self.df['pos'].iloc[i-1]
+            pos_current = self.df['pos'].iloc[i] # Lấy pos đã được cập nhật bởi _calculate_supertrend
+
+            current_long_sl = False
+            current_short_sl = False
+            current_long_tp_final = False
+            current_short_tp_final = False
+
+            if pos_prev == 1: # Nếu đang Long
+                if not pd.isna(self.df['stopLossForLong'].iloc[i]):
+                    current_long_sl = self.df['low'].iloc[i] < self.df['stopLossForLong'].iloc[i]
+                if not pd.isna(self.df['takeProfitForLong3R'].iloc[i]):
+                    current_long_tp_final = self.df['high'].iloc[i] > self.df['takeProfitForLong3R'].iloc[i]
+
+            elif pos_prev == -1: # Nếu đang Short
+                if not pd.isna(self.df['stopLossForShort'].iloc[i]):
+                    current_short_sl = self.df['high'].iloc[i] > self.df['stopLossForShort'].iloc[i]
+                if not pd.isna(self.df['takeProfitForShort3R'].iloc[i]):
+                    current_short_tp_final = self.df['low'].iloc[i] < self.df['takeProfitForShort3R'].iloc[i]
+
+            self.df.loc[self.df.index[i], 'long_sl'] = current_long_sl
+            self.df.loc[self.df.index[i], 'short_sl'] = current_short_sl
+            self.df.loc[self.df.index[i], 'takeProfitForLongFinal'] = current_long_tp_final
+            self.df.loc[self.df.index[i], 'takeProfitForShortFinal'] = current_short_tp_final
+
+            # Nếu có tín hiệu đóng vị thế từ SL/TP và đang có vị thế mở trước đó
+            if (current_long_sl or current_short_sl or current_long_tp_final or current_short_tp_final) and pos_prev != 0:
+                self.df.loc[self.df.index[i], 'pos'] = 0 # Đóng vị thế
+
+    def _calculate_cloud_and_macd(self):
+        self.df['smaSrcHigh'] = ta.ema(self.df['high'], length=self.cloud_val)
+        self.df['smaSrcLow'] = ta.ema(self.df['low'], length=self.cloud_val)
+
+        macd = ta.macd(self.df['close'], fast=12, slow=26, signal=9)
+        self.df['macdLine'] = macd.iloc[:, 0]
+        self.df['histLine'] = macd.iloc[:, 1]
+        self.df['signalLine'] = macd.iloc[:, 2]
+
+    def run_calculations(self):
+        self._calculate_cmo()
+        self._calculate_pivots()
+        self._calculate_rsi()
+        self._calculate_supertrend()
+        self._calculate_entry_tp_sl()
+        self._calculate_cloud_and_macd()
+        return self.df
+
+    def get_last_signal(self):
+        if len(self.df) < 2: # Cần ít nhất 2 nến để so sánh thay đổi
+            return {
+                'timestamp': 'N/A',
+                'active_signal': 'NO_DATA',
+                'message': 'Chưa đủ dữ liệu để tính toán tín hiệu.'
+            }
+
+        last_row = self.df.iloc[-1]
+        second_last_row = self.df.iloc[-2] # Nến trước đó để so sánh thay đổi position
+
+        signal_info = {
+            'timestamp': self.df.index[-1].strftime('%Y-%m-%d %H:%M:%S') if isinstance(self.df.index, pd.DatetimeIndex) else 'N/A',
+            'current_price': last_row['close'],
+            'current_pos': last_row['pos'],
+            'current_trend': last_row['trend']
+        }
+
+        # Kiểm tra tín hiệu MUA
+        if last_row['buySignal'] and second_last_row['pos'] != 1: # Đảm bảo không đang ở vị thế Long
+            signal_info.update({
+                'active_signal': 'NEW_LONG_SIGNAL',
+                'entry_price': last_row['entryOfLongPosition'],
+                'sl_price': last_row['stopLossForLong'],
+                'tp1_price': last_row['takeProfitForLong1R'],
+                'tp2_price': last_row['takeProfitForLong2R'],
+                'tp3_price': last_row['takeProfitForLong3R']
+            })
+        # Kiểm tra tín hiệu BÁN
+        elif last_row['sellSignal'] and second_last_row['pos'] != -1: # Đảm bảo không đang ở vị thế Short
+            signal_info.update({
+                'active_signal': 'NEW_SHORT_SIGNAL',
+                'entry_price': last_row['entryOfShortPosition'],
+                'sl_price': last_row['stopLossForShort'],
+                'tp1_price': last_row['takeProfitForShort1R'],
+                'tp2_price': last_row['takeProfitForShort2R'],
+                'tp3_price': last_row['takeProfitForShort3R']
+            })
+        # Kiểm tra đóng vị thế
+        elif last_row['pos'] == 0 and second_last_row['pos'] != 0: # Vị thế đã đóng
+            closed_pos_type = 'LONG' if second_last_row['pos'] == 1 else 'SHORT'
+            closed_reason = 'UNKNOWN'
+            if closed_pos_type == 'LONG':
+                if last_row['long_sl']:
+                    closed_reason = 'STOP LOSS'
+                elif last_row['takeProfitForLongFinal']:
+                    closed_reason = 'TAKE PROFIT (3R)'
+            elif closed_pos_type == 'SHORT':
+                if last_row['short_sl']:
+                    closed_reason = 'STOP LOSS'
+                elif last_row['takeProfitForShortFinal']:
+                    closed_reason = 'TAKE PROFIT (3R)'
+
+            signal_info.update({
+                'active_signal': 'POSITION_CLOSED',
+                'closed_position_type': closed_pos_type,
+                'closed_reason': closed_reason
+            })
+        # Không có tín hiệu mới, nhưng có vị thế đang mở
+        elif last_row['pos'] != 0:
+            signal_info.update({
+                'active_signal': 'POSITION_OPEN',
+                'open_position_type': 'LONG' if last_row['pos'] == 1 else 'SHORT',
+                'entry_price': last_row['entryOfLongPosition'] if last_row['pos'] == 1 else last_row['entryOfShortPosition'],
+                'sl_price': last_row['stopLossForLong'] if last_row['pos'] == 1 else last_row['stopLossForShort'],
+                'tp1_price': last_row['takeProfitForLong1R'] if last_row['pos'] == 1 else last_row['takeProfitForShort1R'],
+                'tp2_price': last_row['takeProfitForLong2R'] if last_row['pos'] == 1 else last_row['takeProfitForShort2R'],
+                'tp3_price': last_row['takeProfitForLong3R'] if last_row['pos'] == 1 else last_row['takeProfitForShort3R'],
+            })
+        else: # Không có tín hiệu mới và không có vị thế mở
+            signal_info.update({'active_signal': 'FLAT'})
+
+        return signal_info
+
+
+# --- Hàm chính để lấy dữ liệu, tính toán và gửi tin nhắn ---
+async def fetch_and_analyze():
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Đang lấy dữ liệu nến từ Binance...")
+    try:
+        klines = binance_client.get_historical_klines(SYMBOL, TIMEFRAME, limit=CANDLE_LIMIT)
+
+        if not klines:
+            print("Không có dữ liệu nến được trả về.")
+            return
+
+        df = pd.DataFrame(klines, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_asset_volume', 'number_of_trades',
+            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+        ])
+
+        # Chuyển đổi sang kiểu số và thời gian
+        df['open'] = pd.to_numeric(df['open'])
+        df['high'] = pd.to_numeric(df['high'])
+        df['low'] = pd.to_numeric(df['low'])
+        df['close'] = pd.to_numeric(df['close'])
+        df['volume'] = pd.to_numeric(df['volume'])
+        df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+        df.set_index('open_time', inplace=True)
+
+        print(f"Đã lấy {len(df)} nến. Bắt đầu tính toán chỉ báo...")
+        indicator = TrendSignalsUAlgo(df, MULTIPLIER, ATR_PERIODS, ATR_CALC_METHOD, CLOUD_VAL, STOP_LOSS_PERCENT)
+        results_df = indicator.run_calculations()
+
+        last_signal = indicator.get_last_signal()
+
+        message = ""
+        if last_signal['active_signal'] == 'NEW_LONG_SIGNAL':
+            message = (f"**📊 {SYMBOL} - LONG SIGNAL! 📈**\n"
+                       f"Timeframe: {TIMEFRAME}\n"
+                       f"Timestamp: `{last_signal['timestamp']}`\n"
+                       f"Entry Price: `{last_signal['entry_price']:.2f}`\n"
+                       f"Stop Loss: `{last_signal['sl_price']:.2f}`\n"
+                       f"Take Profit 1: `{last_signal['tp1_price']:.2f}`\n"
+                       f"Take Profit 2: `{last_signal['tp2_price']:.2f}`\n"
+                       f"Take Profit 3: `{last_signal['tp3_price']:.2f}`")
+        elif last_signal['active_signal'] == 'NEW_SHORT_SIGNAL':
+            message = (f"**📊 {SYMBOL} - SHORT SIGNAL! 📉**\n"
+                       f"Timeframe: {TIMEFRAME}\n"
+                       f"Timestamp: `{last_signal['timestamp']}`\n"
+                       f"Entry Price: `{last_signal['entry_price']:.2f}`\n"
+                       f"Stop Loss: `{last_signal['sl_price']:.2f}`\n"
+                       f"Take Profit 1: `{last_signal['tp1_price']:.2f}`\n"
+                       f"Take Profit 2: `{last_signal['tp2_price']:.2f}`\n"
+                       f"Take Profit 3: `{last_signal['tp3_price']:.2f}`")
+        elif last_signal['active_signal'] == 'POSITION_CLOSED':
+            message = (f"**🔒 {SYMBOL} - POSITION CLOSED!**\n"
+                       f"Timeframe: {TIMEFRAME}\n"
+                       f"Timestamp: `{last_signal['timestamp']}`\n"
+                       f"Closed Position: `{last_signal['closed_position_type']}`\n"
+                       f"Reason: **{last_signal['closed_reason']}**")
+        else:
+            print(f"Không có tín hiệu mới hoặc vị thế đóng ở nến cuối cùng. Trạng thái: {last_signal['active_signal']}")
+            # Có thể bỏ qua việc gửi tin nhắn nếu không có tín hiệu mới
+            return # Thoát hàm nếu không có tín hiệu cần báo
+
+        if message:
+            await telegram_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode='Markdown')
+            print("Đã gửi tín hiệu Telegram thành công!")
+
+    except Exception as e:
+        print(f"Đã xảy ra lỗi: {e}")
+        # Bạn có thể gửi thông báo lỗi đến Telegram nếu muốn
+        # await telegram_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"Lỗi bot: {e}", parse_mode='Markdown')
+
+# --- Lập lịch chạy bot ---
+def run_bot():
+    asyncio.run(fetch_and_analyze())
+
+# Xác định chu kỳ kiểm tra dựa trên timeframe
+# Ví dụ: 15m -> chạy mỗi 15 phút
+# 1h -> chạy mỗi 1 giờ
+interval_map = {
+    '1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30,
+    '1h': 60, '2h': 120, '4h': 240, '6h': 360, '8h': 480, '12h': 720,
+    '1d': 1440, '3d': 4320, '1w': 10080, '1M': 43200
+}
+
+interval_minutes = interval_map.get(TIMEFRAME)
+if interval_minutes:
+    # Lập lịch chạy task tại một thời điểm cố định để bắt đầu nến mới
+    # Ví dụ: nếu timeframe là 1h, thì chạy vào phút 0 của mỗi giờ (00:00, 01:00, ...)
+    # Điều này quan trọng để đảm bảo bạn chỉ kiểm tra nến đã đóng hoàn chỉnh.
+    if 'm' in TIMEFRAME:
+        schedule.every(interval_minutes).minutes.at(":00").do(run_bot)
+    elif 'h' in TIMEFRAME:
+        schedule.every(int(TIMEFRAME.replace('h',''))).hours.at(":00").do(run_bot)
+    elif 'd' in TIMEFRAME:
+        schedule.every(int(TIMEFRAME.replace('d',''))).days.at("00:01").do(run_bot)
+    else: # Fallback cho các timeframe lớn hơn hoặc không khớp
+        schedule.every(interval_minutes).minutes.do(run_bot)
+    print(f"Bot sẽ kiểm tra tín hiệu mỗi {interval_minutes} phút (hoặc theo chu kỳ của timeframe).")
+else:
+    print("WARNING: Timeframe không được hỗ trợ để lập lịch chính xác. Bot sẽ chạy mỗi 5 phút.")
+    schedule.every(5).minutes.do(run_bot)
+
+
+# Trạng thái của bot
+last_known_pos = 0 # Lưu trạng thái vị thế trước đó để phát hiện thay đổi
+last_signal_timestamp = None # Lưu timestamp của tín hiệu cuối cùng để tránh gửi trùng lặp
+
+print("Bot Telegram đã khởi động. Đang chờ đến lượt kiểm tra đầu tiên...")
+
+while True:
+    try:
+        # Chạy tất cả các task đã lên lịch
+        schedule.run_pending()
+        time.sleep(1) # Chờ 1 giây trước khi kiểm tra lại lịch
+    except KeyboardInterrupt:
+        print("Bot đã dừng bởi người dùng.")
+        break
+    except Exception as e:
+        print(f"Lỗi trong vòng lặp chính của bot: {e}")
+        time.sleep(5) # Chờ một chút trước khi tiếp tục để tránh lỗi liên tục
